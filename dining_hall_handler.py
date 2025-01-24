@@ -397,7 +397,6 @@ def parse_food_html(html: str) -> List[Meal]:
     meal_divs = soup.find_all('div', class_='shortmenumeals')
 
     meals_links = soup.find_all('a', {'href': lambda x: x and 'longmenu.aspx' in x})
-    print(meals_links)
 
 
     for meal_div in meal_divs:
