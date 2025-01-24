@@ -1,11 +1,13 @@
 import re
-import requests
+import aiohttp
+import asyncio
 import pendulum
 from enum import Enum
 from datetime import datetime
 from bs4 import BeautifulSoup
 from dataclasses import dataclass
 from typing import List, Dict, TypedDict, Literal, Optional, Any
+
 
 """
 
@@ -267,216 +269,8 @@ DINING_HALL_HOURS: Dict[str, Dict[str, List[DiningHallHours]]] = {
     },
 }
 
-def get_menu(hall_type: DiningHallType, date: datetime = None) -> Optional[DiningHallResponse]:
-    """
-    Attempts to retrieve information about the current food being served in the provided dining hall,
-    and if a date is provided, that date's meals.
-    
-    Args:
-        hall_type: The dining hall to lookup
-        date: The date to lookup (defaults to current date/time)
-    """
-    if date is None:
-        date = datetime.now()
-    
-    hall_key = get_enum_key_by_enum_value(DiningHallType, hall_type)
-    hall = DINING_HALLS[hall_key]
-    
-    # Format the URL using the hall's location information
-    url = (
-        f"http://nutritionanalysis.dds.uconn.edu/shortmenu.aspx"
-        f"?sName=UCONN+Dining+Services"
-        f"&locationNum={hall.location.id}"
-        f"&locationName={hall.location.name}"
-        f"&naFlag=1"
-        f"&WeeksMenus=This+Week%27s+Menus"
-        f"&myaction=read"
-        f"&dtdate={date.strftime('%m')}%2f{date.day}%2f{date.year}"
-    )
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        
-        return DiningHallResponse(
-            **vars(hall),
-            time=date,
-            meals=parse_food_html(response.text),
-            type=get_enum_key_by_enum_value(DiningHallType, hall_type),
-            status=get_dining_hall_status(hall_type, date)
-        )
-    except Exception:
-        return None
-
-def get_dining_hall_status(hall_type: DiningHallType, date: datetime = None) -> str:
-    """
-    Returns the status of a dining hall for a provided time, or if no time is provided, for right now.
-    
-    Args:
-        hall_type: The dining hall
-        date: The date/time to lookup (defaults to current date/time)
-    """
-    if date is None:
-        date = datetime.now()
-        
-    key = get_enum_key_by_enum_value(DiningHallType, hall_type)
-    hours = DINING_HALL_HOURS[key]
-    
-    # Convert current time to pendulum for easier comparison
-    current_time = pendulum.instance(date)
-    
-    # Search through all statuses to find current one
-    for status, ranges in hours.items():
-        for time_range in ranges:
-            if date.weekday() in time_range.days:
-                start = pendulum.from_format(time_range.start, 'h:mm A')
-                end = pendulum.from_format(time_range.end, 'h:mm A')
-                
-                # Adjust start and end times to current date
-                start = start.set(
-                    year=date.year,
-                    month=date.month,
-                    day=date.day
-                )
-                end = end.set(
-                    year=date.year,
-                    month=date.month,
-                    day=date.day
-                )
-                
-                if start <= current_time <= end:
-                    return status
-    
-    # If no status found, check if between meals
-    breakfast = next(
-        (range for range in hours.get('BREAKFAST', [])
-         if date.weekday() in range.days),
-        None
-    )
-    
-    if not breakfast:
-        return 'CLOSED'
-    
-    # Get earliest start and latest end times for the day
-    start_time = pendulum.from_format(breakfast.start, 'h:mm A')
-    
-    # Get the latest end time for any meal period
-    latest_end = max(
-        pendulum.from_format(range.end, 'h:mm A')
-        for status_ranges in hours.values()
-        for range in status_ranges
-        if date.weekday() in range.days
-    )
-    
-    # Adjust times to current date
-    start_time = start_time.set(
-        year=date.year,
-        month=date.month,
-        day=date.day
-    )
-    latest_end = latest_end.set(
-        year=date.year,
-        month=date.month,
-        day=date.day
-    )
-    
-    if start_time <= current_time <= latest_end:
-        return 'BETWEEN_MEALS'
-    
-    return 'CLOSED'
-
-def parse_food_html(html: str) -> List[Meal]:
-    """Parse the HTML from the dining website into structured meal data."""
-    if not html:
-        return []
-    
-    soup = BeautifulSoup(html, 'html.parser')
-    meals = []
-    
-    # Find all meal sections
-    meal_divs = soup.find_all('div', class_='shortmenumeals')
-
-    meals_links = soup.find_all('a', {'href': lambda x: x and 'longmenu.aspx' in x})
-
-
-    for meal_div in meal_divs:
-        name = meal_div.get_text(strip=True) or 'Unknown Meal'
-        stations = parse_food_stations(str(meal_div))
-        meal = Meal(name=name, stations=stations)
-        meals.append(meal)
-        
-        # Handle Late Night
-        if name != 'Dinner':
-            continue
-            
-        late_night_content = str(meal_div).split('-- LATE NIGHT --')
-        if len(late_night_content) <= 1:
-            continue
-            
-        ln_content = late_night_content[1].split('shortmenucats')
-        ln_stations = [Station(
-            name='Late Night',
-            options=parse_food_station_options(ln_content[0])
-        )]
-        meals.append(Meal(name='Late Night', stations=ln_stations))
-    
-    return meals
-
-def parse_food_stations(html: str) -> List[Station]:
-    """Parse the HTML for a meal's stations."""
-    if not html:
-        return []
-    
-    soup = BeautifulSoup(html, 'html.parser')
-    stations = []
-    
-    # Find all station sections
-    station_divs = soup.find_all('div', class_='shortmenucats')
-    
-    for station_div in station_divs:
-        name = station_div.find('span', style='color: #000000')
-        if not name:
-            continue
-            
-        name = name.get_text(strip=True).replace('-- ', '').replace(' --', '')
-        if name == 'LATE NIGHT':
-            continue
-            
-        name = capitalize_first(name)
-        options = parse_food_station_options(str(station_div))
-        stations.append(Station(name=name, options=options))
-    
-    return stations
-
-def parse_food_station_options(html: str) -> List[str]:
-    """Parse the HTML for a station's food options."""
-    if not html:
-        return []
-    
-    soup = BeautifulSoup(html, 'html.parser')
-    options = []
-    
-    # Find all recipe divs
-    recipe_divs = soup.find_all('div', class_='shortmenurecipes')
-    
-    for recipe_div in recipe_divs:
-        option = recipe_div.find('span', style='color: #000000')
-        if option:
-            options.append(option.get_text(strip=True))
-    
-    return options
-
-def is_weekday(day: int) -> bool:
-    return day in WEEKDAYS
-
-def is_weekend(day: int) -> bool:
-    return day in WEEKENDS
-
-def is_late_night_weekday(day: int) -> bool:
-    return day in LATE_NIGHT_WEEKDAYS
-
 def get_enum_key_by_enum_value(target: Any, value: str, case_sensitive: bool = True) -> Optional[str]:
-    """Get the enum key corresponding to a value."""
+    """Get enum key from value."""
     if not case_sensitive:
         value = value.lower()
         keys = [k for k in target.__members__ 
@@ -484,19 +278,252 @@ def get_enum_key_by_enum_value(target: Any, value: str, case_sensitive: bool = T
     else:
         keys = [k for k in target.__members__ 
                if target[k].value == value]
-    
     return keys[0] if keys else None
 
+def get_dining_hall_status(hall_type: DiningHallType, date: datetime = None) -> str:
+    """Get dining hall status for given time."""
+    if date is None:
+        date = datetime.now()
+        
+    key = get_enum_key_by_enum_value(DiningHallType, hall_type)
+    hours = DINING_HALL_HOURS[key]
+    
+    current_time = pendulum.instance(date)
+    
+    # Check each meal period
+    for status, ranges in hours.items():
+        for time_range in ranges:
+            if date.weekday() in time_range.days:
+                start = pendulum.from_format(time_range.start, 'h:mm A')
+                end = pendulum.from_format(time_range.end, 'h:mm A')
+                
+                start = start.set(year=date.year, month=date.month, day=date.day)
+                end = end.set(year=date.year, month=date.month, day=date.day)
+                
+                if start <= current_time <= end:
+                    return status
+    
+    # Check if between meals
+    breakfast = next((range for range in hours.get('BREAKFAST', [])
+                     if date.weekday() in range.days), None)
+    if not breakfast:
+        return 'CLOSED'
+        
+    # Get earliest start and latest end times
+    start_time = pendulum.from_format(breakfast.start, 'h:mm A')
+    latest_end = max(pendulum.from_format(range.end, 'h:mm A')
+                    for status_ranges in hours.values()
+                    for range in status_ranges
+                    if date.weekday() in range.days)
+    
+    start_time = start_time.set(year=date.year, month=date.month, day=date.day)
+    latest_end = latest_end.set(year=date.year, month=date.month, day=date.day)
+    
+    if start_time <= current_time <= latest_end:
+        return 'BETWEEN_MEALS'
+    
+    return 'CLOSED'
+
 def capitalize_first(text: str) -> str:
-    """Capitalize the first letter of each word in a string."""
+    """Capitalize first letter of each word."""
     return ' '.join(word.capitalize() for word in text.lower().split())
 
+async def get_menu_urls(html: str) -> List[str]:
+   """Extract all longmenu.aspx URLs from initial page."""
+   soup = BeautifulSoup(html, 'html.parser')
+   menu_links = soup.find_all('a', href=lambda x: x and 'longmenu.aspx' in x)
+   return [link['href'] for link in menu_links]
+       
+async def get_nutrition_info(base_url: str, nutrition_url: str) -> Dict:
+    """Get nutrition info from label.aspx page."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{base_url}/{nutrition_url}") as response:
+            html = await response.text()
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            nutrition = {}
+            facts_table = soup.find('table', class_='nutfactsfonts')
+            if facts_table:
+                # Get calories
+                calories = facts_table.find('td', class_='nutfactscaloriesval')
+                if calories:
+                    nutrition['calories'] = calories.text.strip()
+                
+                # Get macros
+                for nutrient in facts_table.find_all('span', class_='nutfactstopnutrient'): 
+                    text = nutrient.get_text(strip=True)
+                    # Handle special cases 
+                    if 'Total Fat' in text:
+                        nutrition['total_fat'] = text.replace('Total Fat', '').strip()
+                    elif 'Saturated Fat' in text:
+                        nutrition['saturated_fat'] = text.replace('Saturated Fat', '').strip()
+                    elif 'Trans Fat' in text:
+                        nutrition['trans_fat'] = text.replace('Trans Fat', '').strip()
+                    elif 'Cholesterol' in text:
+                        nutrition['cholesterol'] = text.replace('Cholesterol', '').strip()
+                    elif 'Sodium' in text:
+                        nutrition['sodium'] = text.replace('Sodium', '').strip()
+                    elif 'Total Carbohydrate' in text:
+                        nutrition['total_carbs'] = text.replace('Total Carbohydrate', '').strip()
+                    elif 'Dietary Fiber' in text:
+                        nutrition['fiber'] = text.replace('Dietary Fiber', '').strip()
+                    elif 'Total Sugars' in text:
+                        nutrition['sugars'] = text.replace('Total Sugars', '').strip()
+                    elif 'Protein' in text:
+                        nutrition['protein'] = text.replace('Protein', '').strip()
+                
+                # Get vitamins/minerals
+                nutrients_table = facts_table.find('table', {'width': '100%', 'align': 'left'})
+                if nutrients_table:
+                    for nutrient in nutrients_table.find_all('span', class_='nutfactstopnutrient'):
+                        text = nutrient.text.strip()
+                        if text:
+                            name = text.split()[0]
+                            value = text.split()[-1]
+                            nutrition[name.lower()] = value
+            
+            allergens = soup.find('span', class_='labelallergensvalue')
+            if allergens:
+                nutrition['allergens'] = allergens.text.strip()
+                
+            return nutrition
+        
+
+async def get_nutrition_urls(menu_html: str) -> List[Dict]:
+   """Get nutrition label URLs from menu page."""
+   soup = BeautifulSoup(menu_html, 'html.parser')
+   items = []
+   for dispname in soup.find_all('div', class_='longmenucoldispname'):
+       if label_link := dispname.find('a', href=lambda x: x and 'label.aspx' in x):
+           station = dispname.find_previous('div', class_='shortmenucats')
+           station_name = station.text.strip(' -') if station else 'Unknown'
+           items.append({
+               'name': label_link.text.strip(),
+               'nutrition_url': label_link['href'],
+               'station': station_name
+           })
+   return items
+
+async def parse_food_html(html: str) -> List[Meal]:
+   """Parse dining hall menu HTML including nutrition data."""
+   menu_urls = await get_menu_urls(html)
+   
+   meals = []
+   async with aiohttp.ClientSession() as session:
+       for menu_url in menu_urls:
+           async with session.get(f"http://nutritionanalysis.dds.uconn.edu/{menu_url}") as resp:
+               menu_html = await resp.text() 
+               items = await get_nutrition_urls(menu_html)
+               
+               stations = {}
+               for item in items:
+                   nutrition = await get_nutrition_info(
+                       "http://nutritionanalysis.dds.uconn.edu", 
+                       item['nutrition_url']
+                   )
+                   if item['station'] not in stations:
+                       stations[item['station']] = []
+                   stations[item['station']].append({
+                       'name': item['name'],
+                       'nutrition': nutrition
+                   })
+               
+               meal_name = menu_url.split('mealName=')[-1]
+               station_list = [
+                   Station(name=capitalize_first(name), options=opts)
+                   for name, opts in stations.items() 
+                   if name != 'LATE NIGHT'
+               ]
+               meals.append(Meal(name=meal_name, stations=station_list))
+               
+               if meal_name == 'Dinner' and 'LATE NIGHT' in stations:
+                   meals.append(Meal(
+                       name='Late Night',
+                       stations=[Station(
+                           name='Late Night',
+                           options=stations['LATE NIGHT']
+                       )]
+                   ))
+   
+   return meals
+
+async def get_menu(hall_type: DiningHallType, date: datetime = None) -> Optional[DiningHallResponse]:
+   """Get menu for a dining hall including nutrition info."""
+   if date is None:
+       date = datetime.now()
+   
+   hall_key = get_enum_key_by_enum_value(DiningHallType, hall_type)
+   hall = DINING_HALLS[hall_key]
+   
+   url = (
+       f"http://nutritionanalysis.dds.uconn.edu/shortmenu.aspx"
+       f"?sName=UCONN+Dining+Services"
+       f"&locationNum={hall.location.id}"
+       f"&locationName={hall.location.name}"
+       f"&naFlag=1"
+       f"&WeeksMenus=This+Week%27s+Menus"
+       f"&myaction=read"
+       f"&dtdate={date.strftime('%m')}%2f{date.day}%2f{date.year}"
+   )
+   
+   try:
+       async with aiohttp.ClientSession() as session:
+           async with session.get(url) as response:
+               html = await response.text()
+               meals = await parse_food_html(html)
+               
+               return DiningHallResponse(
+                   **vars(hall),
+                   time=date,
+                   meals=meals,
+                   type=get_enum_key_by_enum_value(DiningHallType, hall_type),
+                   status=get_dining_hall_status(hall_type, date)
+               )
+   except Exception as e:
+       print(f"Error fetching menu: {e}")
+       return None
+
+async def get_dining_json():
+   """Get complete dining hall data and convert to JSON."""
+   dining_halls = [
+       DiningHallType.CONNECTICUT,
+       DiningHallType.MCMAHON, 
+       DiningHallType.NORTH,
+       DiningHallType.NORTHWEST,
+       DiningHallType.PUTNAM,
+       DiningHallType.SOUTH,
+       DiningHallType.TOWERS,
+       DiningHallType.WHITNEY
+   ]
+   
+   tasks = [get_menu(hall) for hall in dining_halls]
+   results = await asyncio.gather(*tasks)
+   
+   dining_data = {}
+   for result in results:
+       if result:
+           dining_data[result.name] = {
+               'status': result.status,
+               'meals': [
+                   {
+                       'name': meal.name,
+                       'stations': [
+                           {
+                               'name': station.name,
+                               'items': [
+                                   {
+                                       'name': item['name'],
+                                       'nutrition': item['nutrition']
+                                   } for item in station.options
+                               ]
+                           } for station in meal.stations
+                       ]
+                   } for meal in result.meals
+               ]
+           }
+           
+   return dining_data
+
 if __name__ == "__main__":
-    get_menu(DiningHallType.CONNECTICUT)
-    get_menu(DiningHallType.MCMAHON)
-    get_menu(DiningHallType.NORTH)
-    get_menu(DiningHallType.NORTHWEST)
-    get_menu(DiningHallType.PUTNAM)
-    get_menu(DiningHallType.SOUTH)
-    get_menu(DiningHallType.TOWERS)
-    get_menu(DiningHallType.WHITNEY)
+   x = asyncio.run(get_dining_json())
+   print(x)
