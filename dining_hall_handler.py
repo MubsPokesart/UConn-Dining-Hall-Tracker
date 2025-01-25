@@ -389,7 +389,7 @@ async def get_nutrition_info(base_url: str, nutrition_url: str) -> Dict:
            if allergens:
                nutrition['allergens'] = allergens.text.strip()
            
-           # Get serving containers/portions if available
+           # Get serving containers/portions if availabl
            servings_div = facts_table.find_all('div', class_='nutfactsservsize')
            if servings_div:
                nutrition['serving_size'] = servings_div[1].text.strip()
