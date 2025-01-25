@@ -364,7 +364,7 @@ async def get_nutrition_info(base_url: str, nutrition_url: str) -> Dict:
                    elif 'Sodium' in text:
                        nutrition['sodium'] = text.replace('Sodium', '').strip()
                    elif 'Total Carbohydrate' in text:
-                       nutrition['total_carbs'] = text.replace('Total Carbohydrate', '').strip()
+                       nutrition['total_carbs'] = text.replace('Total Carbohydrate.', '').strip()
                    elif 'Dietary Fiber' in text:
                        nutrition['fiber'] = text.replace('Dietary Fiber', '').strip()
                    elif 'Total Sugars' in text:

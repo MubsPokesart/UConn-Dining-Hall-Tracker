@@ -1,3 +1,4 @@
+import json
 import asyncio
 from dining_hall_handler import get_dining_json
 
@@ -70,6 +71,14 @@ def analyze_protein_ratio(data, min_ratio=5):
 
 async def main():
     data = await get_dining_json()
+    
+    data_json = json.dumps(data, indent=4)
+
+    with open('data.json', 'w') as f:
+        f.write(data_json)
+
+async def protein():
+    data = await get_dining_json()
     protein_ratio_items = analyze_protein_ratio(data)
     
     for dining_hall, items in protein_ratio_items.items():
@@ -78,6 +87,4 @@ async def main():
             print(f"{item['name']} ({item['meal']}): {item['ratio']:.2f}g protein per 100 calories")
 
 
-
-print("High Protein Items:")
-asyncio.run(main())
+asyncio.run(protein())
