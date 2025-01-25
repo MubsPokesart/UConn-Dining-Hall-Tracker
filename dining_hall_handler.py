@@ -373,7 +373,17 @@ async def get_nutrition_info(base_url: str, nutrition_url: str) -> Dict:
                        nutrition['added_sugars'] = text.replace('Added Sugars', '').strip()
                    elif 'Protein' in text:
                        nutrition['protein'] = text.replace('Protein', '').strip()
-
+               
+               """# Get vitamins/minerals
+               nutrients_table = facts_table.find('table', {'width': '100%', 'align': 'left'})
+               if nutrients_table:
+                   for nutrient in nutrients_table.find_all('span', class_='nutfactstopnutrient'):
+                       text = nutrient.text.strip()
+                       if text:
+                           name = text.split()[0]
+                           value = text.split()[-1]
+                           nutrition[name.lower()] = value"""
+           
            # Get allergens
            allergens = soup.find('span', class_='labelallergensvalue')
            if allergens:
@@ -391,30 +401,15 @@ async def get_nutrition_urls(menu_html: str) -> List[Dict]:
    """Get nutrition label URLs from menu page."""
    soup = BeautifulSoup(menu_html, 'html.parser')
    items = []
-   
-   # Get all menu categories
-   menu_cats = soup.find_all('div', class_='longmenucolmenucat')
-   
-   for menu_cat in menu_cats:
-       category_name = menu_cat.text.strip('-- ')
-       current = menu_cat.find_next()
-       category_items = []
-       
-       # Get all items until next category or end
-       while current and not current.has_attr('class') or \
-             (current.has_attr('class') and 'longmenucolmenucat' not in current['class']):
-               
-           if current.has_attr('class') and 'longmenucoldispname' in current['class']:
-               if label_link := current.find('a', href=lambda x: x and 'label.aspx' in x):
-                   category_items.append({
-                       'name': label_link.text.strip(),
-                       'nutrition_url': label_link['href'],
-                       'station': category_name
-                   })
-           current = current.find_next()
-           
-       items.extend(category_items)
-       
+   for dispname in soup.find_all('div', class_='longmenucoldispname'):
+       if label_link := dispname.find('a', href=lambda x: x and 'label.aspx' in x):
+           station = dispname.find_previous('div', class_='shortmenucats')
+           station_name = station.text.strip(' -') if station else 'Unknown'
+           items.append({
+               'name': label_link.text.strip(),
+               'nutrition_url': label_link['href'],
+               'station': station_name
+           })
    return items
 
 async def parse_food_html(html: str) -> List[Meal]:
