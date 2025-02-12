@@ -340,62 +340,56 @@ async def get_nutrition_info(base_url: str, nutrition_url: str) -> Dict:
        async with session.get(f"{base_url}/{nutrition_url}") as response:
            html = await response.text()
            soup = BeautifulSoup(html, 'html.parser')
-           
-           nutrition = {}
-           facts_table = soup.find('table', class_='nutfactsfonts')
-           if facts_table:
-               # Get calories
-               calories = facts_table.find('td', class_='nutfactscaloriesval')
-               if calories:
-                   nutrition['calories'] = calories.text.strip()
-               
-               # Get macros
-               for nutrient in facts_table.find_all('span', class_='nutfactstopnutrient'): 
-                   text = nutrient.get_text(strip=True)
-                   # Handle special cases 
-                   if 'Total Fat' in text:
-                       nutrition['total_fat'] = text.replace('Total Fat', '').strip()
-                   elif 'Saturated Fat' in text:
-                       nutrition['saturated_fat'] = text.replace('Saturated Fat', '').strip()
-                   elif 'Trans Fat' in text:
-                       nutrition['trans_fat'] = text.replace('Trans Fat', '').strip()
-                   elif 'Cholesterol' in text:
-                       nutrition['cholesterol'] = text.replace('Cholesterol', '').strip()
-                   elif 'Sodium' in text:
-                       nutrition['sodium'] = text.replace('Sodium', '').strip()
-                   elif 'Total Carbohydrate' in text:
-                       nutrition['total_carbs'] = text.replace('Total Carbohydrate.', '').strip()
-                   elif 'Dietary Fiber' in text:
-                       nutrition['fiber'] = text.replace('Dietary Fiber', '').strip()
-                   elif 'Total Sugars' in text:
-                       nutrition['sugars'] = text.replace('Total Sugars', '').strip()
-                   elif 'Added Sugars' in text:
-                       nutrition['added_sugars'] = text.replace('Added Sugars', '').strip()
-                   elif 'Protein' in text:
-                       nutrition['protein'] = text.replace('Protein', '').strip()
-               
-               """# Get vitamins/minerals
-               nutrients_table = facts_table.find('table', {'width': '100%', 'align': 'left'})
-               if nutrients_table:
-                   for nutrient in nutrients_table.find_all('span', class_='nutfactstopnutrient'):
-                       text = nutrient.text.strip()
-                       if text:
-                           name = text.split()[0]
-                           value = text.split()[-1]
-                           nutrition[name.lower()] = value"""
-           
-           # Get allergens
-           allergens = soup.find('span', class_='labelallergensvalue')
-           if allergens:
-               nutrition['allergens'] = allergens.text.strip()
-           
-           # Get serving containers/portions if availabl
-           servings_div = facts_table.find_all('div', class_='nutfactsservsize')
-           if servings_div:
-               nutrition['serving_size'] = servings_div[1].text.strip()
+           try:
+                nutrition = {}
+                facts_table = soup.find('table', class_='nutfactsfonts')
+                if facts_table:
+                    # Get calories
+                    calories = facts_table.find('td', class_='nutfactscaloriesval')
+                    if calories:
+                        nutrition['calories'] = calories.text.strip()
+                    
+                    # Get macros
+                    for nutrient in facts_table.find_all('span', class_='nutfactstopnutrient'): 
+                        text = nutrient.get_text(strip=True)
+                        # Handle special cases 
+                        if 'Total Fat' in text:
+                            nutrition['total_fat'] = text.replace('Total Fat', '').strip()
+                        elif 'Saturated Fat' in text:
+                            nutrition['saturated_fat'] = text.replace('Saturated Fat', '').strip()
+                        elif 'Trans Fat' in text:
+                            nutrition['trans_fat'] = text.replace('Trans Fat', '').strip()
+                        elif 'Cholesterol' in text:
+                            nutrition['cholesterol'] = text.replace('Cholesterol', '').strip()
+                        elif 'Sodium' in text:
+                            nutrition['sodium'] = text.replace('Sodium', '').strip()
+                        elif 'Total Carbohydrate' in text:
+                            nutrition['total_carbs'] = text.replace('Total Carbohydrate.', '').strip()
+                        elif 'Dietary Fiber' in text:
+                            nutrition['fiber'] = text.replace('Dietary Fiber', '').strip()
+                        elif 'Total Sugars' in text:
+                            nutrition['sugars'] = text.replace('Total Sugars', '').strip()
+                        elif 'Added Sugars' in text:
+                            nutrition['added_sugars'] = text.replace('Added Sugars', '').strip()
+                        elif 'Protein' in text:
+                            nutrition['protein'] = text.replace('Protein', '').strip()
 
-           return nutrition
-        
+                # Get allergens
+                allergens = soup.find('span', class_='labelallergensvalue')
+                if allergens:
+                    nutrition['allergens'] = allergens.text.strip()
+
+                # Get serving containers/portions if availabl
+                servings_div = facts_table.find_all('div', class_='nutfactsservsize') 
+                if servings_div:
+                    nutrition['serving_size'] = servings_div[1].text.strip()
+
+           except Exception as e:
+               print(f"Error fetching nutrition info: {e}")
+               return {}
+
+           finally:
+               return nutrition        
 
 async def get_nutrition_urls(menu_html: str) -> List[Dict]:
    """Get nutrition label URLs from menu page."""
