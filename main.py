@@ -91,8 +91,8 @@ class ProteinAnalyzerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("UConn Dining Hall Protein Analyzer")
-        self.root.geometry("800x600")
-        self.root.minsize(600, 500)
+        self.root.geometry("900x700")
+        self.root.minsize(700, 600)
         
         # Create main frame
         main_frame = ttk.Frame(root, padding="10")
@@ -102,12 +102,16 @@ class ProteinAnalyzerGUI:
         controls_frame = ttk.Frame(main_frame)
         controls_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Dining hall filter
+        # Dining hall filter label
         ttk.Label(controls_frame, text="Dining Hall:").pack(side=tk.LEFT, padx=(0, 5))
-        self.dining_hall_var = tk.StringVar(value="All")
-        self.dining_hall_combo = ttk.Combobox(controls_frame, textvariable=self.dining_hall_var, state="readonly")
-        self.dining_hall_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self.dining_hall_combo["values"] = ["All"]  # Will be populated later
+        
+        # Frame for dining hall selection
+        self.dining_hall_frame = ttk.Frame(main_frame)
+        self.dining_hall_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Create a dictionary to store dining hall checkbutton variables
+        self.dining_hall_vars = {}
+        # Will be populated with checkbuttons later
         
         # Meal filter
         ttk.Label(controls_frame, text="Meal:").pack(side=tk.LEFT, padx=(0, 5))
@@ -136,6 +140,20 @@ class ProteinAnalyzerGUI:
         # Apply filters button
         self.apply_button = ttk.Button(controls_frame, text="Apply Filters", command=self.apply_filters)
         self.apply_button.pack(side=tk.RIGHT)
+        
+        # Create frame for additional filters
+        self.filter_frame = ttk.LabelFrame(main_frame, text="Filters")
+        self.filter_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Button to toggle dining hall selection visibility
+        self.show_dining_halls_var = tk.BooleanVar(value=False)
+        self.show_dining_halls_button = ttk.Checkbutton(
+            self.filter_frame,
+            text="Show Dining Hall Selection",
+            variable=self.show_dining_halls_var,
+            command=self.toggle_dining_hall_visibility
+        )
+        self.show_dining_halls_button.pack(anchor=tk.W, padx=5, pady=5)
         
         # Create notebook for tabs
         self.notebook = ttk.Notebook(main_frame)
@@ -182,9 +200,19 @@ class ProteinAnalyzerGUI:
         self.protein_ratio_data = None
         self.protein_content_data = None
         
+        # Hide dining hall selection by default
+        self.dining_hall_frame.pack_forget()
+        
         # Start loading data
         self.status_var.set("Loading data...")
         threading.Thread(target=self.load_data, daemon=True).start()
+    
+    def toggle_dining_hall_visibility(self):
+        """Toggle the visibility of the dining hall selection frame."""
+        if self.show_dining_halls_var.get():
+            self.dining_hall_frame.pack(fill=tk.X, pady=(0, 10), after=self.filter_frame)
+        else:
+            self.dining_hall_frame.pack_forget()
     
     def load_data(self):
         """Load dining hall data in a separate thread."""
@@ -212,9 +240,60 @@ class ProteinAnalyzerGUI:
     
     def update_ui_after_load(self, dining_halls):
         """Update UI elements after data is loaded."""
-        self.dining_hall_combo["values"] = dining_halls
+        # Clear existing checkbuttons first
+        for widget in self.dining_hall_frame.winfo_children():
+            widget.destroy()
+        
+        # Create new checkbuttons for each dining hall
+        self.dining_hall_vars = {}
+        
+        # Add "Select All" option
+        self.select_all_var = tk.BooleanVar(value=True)
+        self.select_all_check = ttk.Checkbutton(
+            self.dining_hall_frame, 
+            text="All Dining Halls",
+            variable=self.select_all_var,
+            command=self.toggle_all_dining_halls
+        )
+        self.select_all_check.grid(row=0, column=0, sticky="w", padx=5)
+        
+        # Create a checkbutton for each dining hall
+        row, col = 1, 0
+        for i, hall in enumerate(dining_halls[1:]):  # Skip "All"
+            self.dining_hall_vars[hall] = tk.BooleanVar(value=True)
+            hall_check = ttk.Checkbutton(
+                self.dining_hall_frame, 
+                text=hall,
+                variable=self.dining_hall_vars[hall],
+                command=self.update_select_all_state
+            )
+            hall_check.grid(row=row, column=col, sticky="w", padx=5)
+            
+            # Arrange in 3 columns
+            col += 1
+            if col > 2:
+                col = 0
+                row += 1
+        
         self.apply_filters()
         self.status_var.set("Data loaded successfully")
+    
+    def toggle_all_dining_halls(self):
+        """Toggle all dining hall checkboxes based on the 'Select All' checkbox."""
+        state = self.select_all_var.get()
+        for var in self.dining_hall_vars.values():
+            var.set(state)
+    
+    def update_select_all_state(self):
+        """Update the 'Select All' checkbox state based on individual selections."""
+        if all(var.get() for var in self.dining_hall_vars.values()):
+            self.select_all_var.set(True)
+        elif not any(var.get() for var in self.dining_hall_vars.values()):
+            # If none selected, select all to prevent empty selection
+            self.toggle_all_dining_halls()
+            self.select_all_var.set(True)
+        else:
+            self.select_all_var.set(False)
     
     def refresh_data(self):
         """Refresh data from the server."""
@@ -232,7 +311,6 @@ class ProteinAnalyzerGUI:
         self.tree.delete(*self.tree.get_children())
         
         # Get filter values
-        dining_hall_filter = self.dining_hall_var.get()
         meal_filter = self.meal_var.get()
         analysis_type = self.analysis_var.get()
         
@@ -245,12 +323,12 @@ class ProteinAnalyzerGUI:
         # Select data source based on analysis type
         data_source = self.protein_ratio_data if analysis_type == "Protein Ratio" else self.protein_content_data
         
-        # Filter dining halls
-        dining_halls = [dining_hall_filter] if dining_hall_filter != "All" else data_source.keys()
+        # Get selected dining halls
+        selected_halls = [hall for hall, var in self.dining_hall_vars.items() if var.get()]
         
         # Add rows to treeview
         row_count = 0
-        for hall in dining_halls:
+        for hall in selected_halls:
             if hall not in data_source:
                 continue
                 
